@@ -1,0 +1,596 @@
+---
+title: "Report Midterm Statistical Learning"
+author: "Cesar Conejo Villalobos"
+date: "12/18/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache=TRUE,message=FALSE, warning=FALSE)
+knitr::opts_chunk$set(set.seed(42))
+knitr::opts_chunk$set(fig.width=6, fig.height=3)
+
+# Load the dataset and models
+load('rda/wineQuality.rda')
+load('rda/train_models_classification.rda')
+
+# Load the libraries
+library(ggplot2)
+library(caret)
+library(corrplot)
+library(knitr)
+library(VGAM)
+#library(MASS)
+
+
+# Training and testing sets
+set.seed(42)
+spl = createDataPartition(wineQuality$quality, p = 0.8, list = FALSE) 
+wineQuality.Train = wineQuality[spl,]
+wineQuality.Test = wineQuality[-spl,]
+rm(spl)
+
+```
+
+## Introduction
+
+For this project, we consider two data sets related to two variants of the Portuguese [Vinho Verde](https://www.vinhoverde.pt/en/homepage)  wine. The first variety is called *red* and has 1599 observations. The second variety is *white* and has 4898. Both data sets are available in the repository [data.world](https://data.world/uci/wine-quality).
+
+The biggest differences between both products are the following:
+
+1. Red wines are produced with black grapes and white wines with grapes. Moreover, red wines are fermented with the grape seeds and skins. On the other hand, white wines are not fermented with these parts.
+
+2. In the oxidation process, red wine varieties require an increase in oxygen. For archiving that, winemakers use oak barrels. On the other hand, while white wine requires to reduce exposure to oxygen.  This can be done using stainless steel vats.
+
+Second, the data set shows the chemical properties (continuous variables) for each observation. Also, an ordinal variable *quality* is used as a ranking by tasters. In the case of the data set, each variety is tasted by three independent tasters and the final quality rank is the median rank given by the taster on a scale from 0 (worst) to 10 (best).
+
+Although some crucial information is hidden in this data set such as wine brand and wine selling price, the price of wine depends on the quality and appreciation by wine tasters. As a result, the objective of this project is to predict the quality of the wine as a function of the other variables. Moreover, the focus of the predictions will be to detect high-quality wine in order to increase the selling price of the wine products.
+
+The raw `R` code is attached to this report. However, if possible, more details about the code used in this project are available in my repository on [Github](https://github.com/cconejov/UC3M_Statistical_Learning). Also, to guaranty *reproducibility* of the results, the seed used in all codes is 42.
+
+## Dataset
+
+A quick review of the data set is given with the function `summary()`.
+
+```{r echo=FALSE}
+summary(wineQuality)
+```
+
+The most important variable for this data set is `quality`. Before the graphical description of the variables, we create a `train` and `test` data set using 80% and 20% of the observations respectively.
+
+The distribution of the dependent variable for the `train` set is given by figure \ref{fig:quality1}. We can observe how the quality values are concentrated in values 5, 6, and 7. Also, we notice that there are no wines ranked in the values 1 and 2, and a small proportion of wines are qualified as quality 3 and 4. On the right side, again, there is a small proportion of ranked wine as 8 and 9, and there is no wine qualified as 10. Moreover, the proportion of quality wine by category is similar. Then we can no conclude that the category of wine (red or white) define previously their quality.
+
+```{r quality1, fig.cap = "Distribution of the quality variable scale 1 - 10 (Train data)\\label{fig:quality1}", echo=FALSE}
+ggplot(wineQuality.Train,aes(x=factor(quality),fill= Category)) +
+       geom_bar(stat="count") +
+  labs(title = "Distribution of Wine Quality by Category") +
+  scale_fill_manual(values=c("red3", "steelblue")) +
+       theme_minimal()
+```
+
+Figure \ref{fig:quality2} provide the relation of wine quality vs alcohol. The graphic shows that there is no clear linear relationship between these two variables. However, we notice that white wines tend to have higher levels of alcohol.
+
+```{r quality2, fig.cap = "Distribution of wine quality vs alcohol level (Train Data)\\label{fig:quality2}", echo=FALSE}
+ggplot(wineQuality.Train, aes(x=alcohol, y= quality,color= Category)) +
+  geom_point(alpha=0.8) + 
+  scale_color_manual(values=c("red3", "steelblue")) +
+  ggtitle("Wine Quality vs Alcohol") +
+  theme_minimal()
+
+```
+
+## Regression Problem
+
+First, in figure \ref{fig:lr1}  we review the relation of the independent variables with the dependent variable `quality`. If we proceed with a simple linear regression of the most relevant predictor `alcohol` using the function `lm(quality ~ alcohol, data = wineQuality.Train)` with obtain a model with a $R^{2} =  0.21$ in training test and $R^{2} =  0.17$ for testing set. To improve this model, we can add more variables to the model. Figure \ref{fig:lr2} reflects the relation between the variables (With the idea of identifying multicollinearity). Except for the relation between *density* and *alcohol*, most of the variables are not related. This observation will be important in the future models when we will see how the *traditional*  and *penalized* frameworks have similar performance.
+
+```{r lr1, fig.cap = "Relation between the independent variables and quality (Train Data)\\label{fig:lr1}", echo=FALSE}
+correlation <- cor(wineQuality.Train[,-13])
+corr_quality <- sort(correlation["quality",], decreasing = T)
+corr <- data.frame(corr_quality)
+ggplot(corr,aes(x = row.names(corr), y = corr_quality)) + 
+  geom_bar(stat = "identity", fill = "lightblue") + 
+  scale_x_discrete(limits= row.names(corr)) +
+  labs(x = "", y = "Quality", title = "Correlations") + 
+  theme(plot.title = element_text(hjust = 0, size = rel(1.5)),
+        axis.text.x = element_text(angle = 45, hjust = 1)) 
+```
+
+```{r lr2, fig.cap = "Relation between the independent variables (Train Data)\\label{fig:lr2}", echo=FALSE}
+corrplot(correlation[-12,-12], method="color", type ="upper")
+```
+
+With this analysis, we proceed with the formula `lm(quality ~ ., data = wineQuality.Train)`. In this case, we have a $R^{2} =  0.31$ for the training set and $R^{2} =  0.26$ for the testing. We have an improvement of almost 10% if we consider all the variables. However, this prediction can be considered as noisy if the purpose is to predict the exact quality value. Table 1 shows the proportions of observations for each category is unbalanced, especially in the cases of too low (less or equal than 4) or too high (greater or equal than 8).
+
+```{r echo=FALSE}
+statDisData <-  t(as.data.frame(round(100*table(wineQuality$quality)/nrow(wineQuality),4)))
+
+tbl <- as.data.frame(statDisData, row.names = FALSE)
+report <- tbl[2,]
+colnames(report)  <- tbl[1,]
+
+knitr::kable(report,
+             row.names = FALSE,
+             caption = "Proportion (in %) of quality category",
+             align="c")
+```
+
+
+As a result, instead of predicting the *real quality* values, wine quality can be analyzed into three categories with the following characteristics:
+
+* `Low`: Low quality wine, values of quality less than 5. (2384 observations, proportion: 36.7%)
+* `Medium`: Medium quality wine. Values with quality equal to 6. (2836 observation, proportion: 43.6%)
+* `High`: High quality class. Values of quality greater or equal than 7. (1277 observation, proportion: 19.7%)
+
+## Classification Problem
+
+We create a new variable called `quality.class` based on the previous scheme. In this case, we will focus our attention on detecting the `high` quality class that represents approximately 20%  of the observations. Although the proportions are a little further from being perfectly balanced, the proportion of 20% gives the opportunity of expecting better results under this new scenario.
+
+Figure \ref{fig:classif1} show the relation under this new approach to the problem. Again, `alcohol` is the variable that best identifies the relationship between the independent and dependent variables.
+
+```{r eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+# Charge to the environment. Do not show results and code
+
+wineQuality$quality.class <- factor(ifelse(wineQuality$quality < 6, "Low",
+                                           ifelse(wineQuality$quality < 7, "Medium", "High")), 
+                                    levels = c("Low", "Medium", "High"))
+
+wineQuality$quality <- NULL
+
+# Again, training and test sets
+set.seed(42)
+spl <- createDataPartition(wineQuality$quality.class, p = 0.8, list = FALSE)  # 80% for training
+wineQuality.Train <- wineQuality[spl,]
+wineQuality.Test  <- wineQuality[-spl,]
+rm(spl)
+```
+
+Then, we can divide our analysis based on the tools:
+
+1. **Logistic Regression:**
+
+  a. Simple logistic regression. Independent variable: `alcohol`
+  b. Multiple logistic regression. Using all the independent variables.
+  c. Penalized logistic regression. Method: `glmnet`.
+
+2. **Bayes classifiers:**
+  
+  a. Linear discriminant analysis. Methods: `LDA`, `sparseLDA`, `stepLDA`. 
+  b. Quadratic discriminant analysis. Methods: `QDA`, `stepQDA`.
+  c. Naive Bayes. Method `nb`.
+
+\newpage
+
+The simple and multiple logistic regression follows the traditional scheme of 80% for training and 20% for testing. (Specifically, we have 476 low observations, 567 as medium quality, and 255 as high quality for the testing set.) The rest of the methods are calibrated using the `train()` function of the `caret` package under the scheme of cross-validation with 5 repeats of 10-fold cross-validation.
+
+```{r classif1, fig.cap = "Relation indepedent variables with dependent variable (Train data set)\\label{fig:classif1}", echo=FALSE}
+featurePlot(x = wineQuality.Train[,-c(12,13)],
+            y = factor(wineQuality.Train$quality.class),
+            plot = "box",
+            strip = strip.custom(par.strip.text = list(cex = 0.7)),
+            scales = list(x = list(relation = "free"),
+                          y = list(relation = "free")
+            )
+)
+```
+
+The key metrics for  this classification problem will be:
+
+1. **Global Accuracy:** General accuracy of the predictive capability of the model. (The greater, the better, with a perfect score of 100%.)
+
+2. **High-quality Sensitivity:** Percentage of high-quality wine correctly predicted as high-quality wine. (The greater, the better, with a perfect score of 100%.)
+
+3. **Number of low-quality misclassification:** Nominal value of low-quality wine predicted to be high-class. It is the worst error in this model. (The lower, the better, with a perfect value of 0.)
+
+### Logistic regression
+
+In the case of the logistic regression approach, we have 3 groups. Therefore, it is necessary to apply 2 regression models. The performance of the three logistic models is given in table 3. In general, accuracy is slightly similar in the range between 53 and 55 percentage. In this sense, the simple logistic model will provide a parsimonious and fairly accurate model if the purpose is to provide explanations and statistical inference. For example, taking as reference level the low-quality wine, for every unit in alcohol, the *log odds* of medium-quality (vs low quality) increases by 0.70 units. Similarly, for each unit increase in alcohol, the *log odds* of high quality (vs low quality) increases 1.35.
+
+```{r eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+# Charge to the environment. Do not show results and code
+## CALIBRATE the vglm objects (There are S4 objects, and present problems for loading)
+
+# Simple Linear Log regression
+log_reg_model_1 <- vglm(quality.class ~ alcohol, 
+                        family = multinomial(refLevel=1), 
+                        data = wineQuality.Train)
+
+# Multiple logistic regression:
+log_reg_model_2 <- vglm(quality.class ~ ., 
+                        family = multinomial(refLevel=1), 
+                        data = wineQuality.Train)
+
+log_reg_model_3 <- train.models[[3]]
+
+# Bring the information
+
+## Simple Log.regression:
+log_reg_model_1_prob.test <-  predict(log_reg_model_1, 
+                                    newdata = wineQuality.Test, 
+                                    type = "response")
+
+log_reg_model_1_pred.test <- factor(levels(wineQuality$quality.class)[max.col(log_reg_model_1_prob.test)], levels = c("Low", "Medium", "High"))
+
+log_reg_model_1_CM <-  confusionMatrix(log_reg_model_1_pred.test,
+                                       wineQuality.Test$quality.class)
+
+## Mult. Log Regression
+log_reg_model_2_prob.test <- predict(log_reg_model_2, 
+                                    newdata = wineQuality.Test, 
+                                    type = "response")
+
+log_reg_model_2_pred.test <- factor(levels(wineQuality$quality.class)[max.col(log_reg_model_2_prob.test)], levels = c("Low", "Medium", "High"))
+
+log_reg_model_2_CM <-  confusionMatrix(log_reg_model_2_pred.test,
+                                       wineQuality.Test$quality.class)
+
+log_reg_model_3_pred.test <- predict(log_reg_model_3, wineQuality.Test)
+log_reg_model_3_CM <-  confusionMatrix(log_reg_model_3_pred.test,
+                                       wineQuality.Test$quality.class)
+
+Method.lr <- c("Simple.Log.Reg","Multiple.Log.Reg","Penalized.Log.Reg")
+Accuraracy.lr <- c(round(100*log_reg_model_1_CM$overall[1],2),
+                round(100*log_reg_model_2_CM$overall[1],2),
+                round(100*log_reg_model_3_CM$overall[1],2))
+High.Sensitivity.lr <- c(round(100*log_reg_model_1_CM$byClass[3,1],2),
+                      round(100*log_reg_model_2_CM$byClass[3,1],2),
+                      round(100*log_reg_model_3_CM$byClass[3,1],2))
+Worst.Error.lr <- c(log_reg_model_1_CM$table[3,1] ,
+                 log_reg_model_2_CM$table[3,1] ,
+                 log_reg_model_3_CM$table[3,1] )
+summary.methods.lr <- data.frame(Method.lr,
+                              Accuraracy.lr,
+                              High.Sensitivity.lr,
+                              Worst.Error.lr,
+                              row.names = NULL)
+rm(Method.lr,Accuraracy.lr,High.Sensitivity.lr,Worst.Error.lr)
+```
+
+```{r echo=FALSE}
+coefoutplut <- log_reg_model_1@coefficients
+knitr::kable(coefoutplut,
+      caption = "Coefficient simple logistic Regression",
+      align="c")
+```
+
+However, the models that use all the independent values have a better high-quality wine detection (with a cost of 5 low-quality wine predicted has high-quality). It is important to observe the effect of the few correlations between the independent variables. This gives, as a result, the *multiple log. regression* and *penalized log. regression* has a similar performance.
+
+```{r echo=FALSE}
+knitr::kable(summary.methods.lr,
+      caption = "Metrics for Logistic Regression methods",
+      align="c")
+
+```
+
+For the logistic models, the best approach will be the *penalized* version using `caret` becasue this approach will be more robust. Also, `caret` provides the importance of the variable in the calibration process (Figure \ref{fig:logImport}). We can see how the variables *density* and *residual.sugar* are also prominent in the detection of high and low-quality wine. (together with *alcohol*)
+
+```{r logImport, fig.cap = "Variable importance for Penalized Logistic Regression\\label{fig:logImport}", echo=FALSE}
+log_reg_model_3_imp <- varImp(log_reg_model_3, scale = F)
+plot(log_reg_model_3_imp, scales = list(y = list(cex = .95)))
+```
+
+### Bayes Classifiers
+
+### a) Linear Discriminat Analysis
+
+Table 4 provides the key metrics for these linear models. We have a range of accuracy from 52% to 55%. As a result, we have a similar performance as the logistic models. However, high-quality sensitivity detection is superior for any linear discriminant than logistic.  On average, we increase the right prediction of high-quality wine in 13 observations with a cost of an increase of 4 observations low-quality wine fitted as high quality. In summary, for each bad prediction of high-quality wine, we will have 3.25 observations correctly predicted as high-quality. Again, all three models perform similarly due to a lack of correlation between the independent variables.
+
+```{r, echo=FALSE}
+lda_model_1 <- train.models[[4]]
+
+## c) Summary / Predictions / CM
+lda_model_1_pred.test = predict(lda_model_1, wineQuality.Test)
+lda_model_1_CM <- confusionMatrix(lda_model_1_pred.test,wineQuality.Test$quality.class)
+
+lda_model_2 <- train.models[[5]]
+
+## c) Summary / Predictions / CM
+lda_model_2_pred.test = predict(lda_model_2, wineQuality.Test)
+lda_model_2_CM <- confusionMatrix(lda_model_2_pred.test,wineQuality.Test$quality.class)
+
+lda_model_3 <- train.models[[6]]
+
+## c) Summary / Predictions / CM
+lda_model_3_pred.test = predict(lda_model_3, wineQuality.Test)
+lda_model_3_CM <- confusionMatrix(lda_model_3_pred.test,wineQuality.Test$quality.class)
+
+
+Method.lda <- c("lda","sparseLDA","stepLDA")
+Accuraracy.lda <- c(round(100*lda_model_1_CM$overall[1],2),
+                    round(100*lda_model_2_CM$overall[1],2),
+                    round(100*lda_model_3_CM$overall[1],2))
+High.Sensitivity.lda <- c(round(100*lda_model_1_CM$byClass[3,1],2),
+                          round(100*lda_model_2_CM$byClass[3,1],2),
+                          round(100*lda_model_3_CM$byClass[3,1],2))
+Worst.Error.lda <- c(lda_model_1_CM$table[3,1] ,
+                     lda_model_2_CM$table[3,1] ,
+                     lda_model_3_CM$table[3,1] )
+summary.methods.lda <- data.frame(Method.lda,
+                                  Accuraracy.lda,
+                                  High.Sensitivity.lda,
+                                  Worst.Error.lda,
+                                  row.names = NULL)
+rm(Method.lda,Accuraracy.lda,High.Sensitivity.lda,Worst.Error.lda)
+
+knitr::kable(summary.methods.lda,
+      caption = "Metrics for LDA methods",
+      align="c")
+```
+
+### b) Quadratic Discriminat Analysis
+
+Table 5 reflects the results in the case of the quadratic methods. As expected, the performance of these models in large data sets is lower than their linear variant (Although not so much in terms of general accuracy). Also, it is important to show the high sensitivity of the `qda` model. However, the increase of the low-ranking wine predicted as high is considerably higher than the other models.
+
+```{r, echo=FALSE}
+qda_model_1 <- train.models[[7]]
+
+## c) Summary / Predictions / CM
+qda_model_1_pred.test <-  predict(qda_model_1, wineQuality.Test)
+qda_model_1_CM <- confusionMatrix(qda_model_1_pred.test,wineQuality.Test$quality.class)
+
+
+qda_model_2 <- train.models[[8]]
+
+## c) Summary / Predictions / CM
+qda_model_2_pred.test <- predict(qda_model_2, wineQuality.Test)
+qda_model_2_CM <- confusionMatrix(qda_model_2_pred.test,wineQuality.Test$quality.class)
+
+
+Method.qda <- c("qda","stepQDA")
+Accuraracy.qda <- c(round(100*qda_model_1_CM$overall[1],2),
+                    round(100*qda_model_2_CM$overall[1],2))
+High.Sensitivity.qda <- c(round(100*qda_model_1_CM$byClass[3,1],2),
+                          round(100*qda_model_2_CM$byClass[3,1],2))
+Worst.Error.qda <- c(qda_model_1_CM$table[3,1],
+                     qda_model_2_CM$table[3,1] )
+summary.methods.qda <- data.frame(Method.qda,
+                                  Accuraracy.qda,
+                                  High.Sensitivity.qda,
+                                  Worst.Error.qda,
+                                  row.names = NULL)
+rm(Method.qda,Accuraracy.qda,High.Sensitivity.qda,Worst.Error.qda)
+
+knitr::kable(summary.methods.qda,
+      caption = "Metrics for QDA methods",
+      align="c")
+```
+
+### c) Naive Bayes
+
+Finally, Table 6 shows the result of the naive Bayes methodology. This method has the lowest general accuracy. Additionally, naive Bayes has the same effect over the high sensibility percentage with a costly increase of low-ranking wine classified as high-quality.
+
+```{r echo=FALSE}
+nb_model_1 <- train.models[[9]]
+
+## c) Summary / Predictions / CM
+nb_model_1_pred.test <-  predict(nb_model_1, wineQuality.Test)
+nb_model_1_CM <- confusionMatrix(nb_model_1_pred.test, wineQuality.Test$quality.class)
+
+Method.nb <- c("nb")
+Accuraracy.nb <- c(round(100*nb_model_1_CM$overall[1],2))
+High.Sensitivity.nb <- c(round(100*nb_model_1_CM$byClass[3,1],2))
+Worst.Error.nb <- c(nb_model_1_CM$table[3,1])
+summary.methods.nb <- data.frame(Method.nb,
+                                  Accuraracy.nb,
+                                  High.Sensitivity.nb,
+                                  Worst.Error.nb,
+                                  row.names = NULL)
+rm(Method.nb,Accuraracy.nb,High.Sensitivity.nb,Worst.Error.nb)
+
+
+knitr::kable(summary.methods.nb,
+      caption = "Metrics for nb  (naiveBayes) method",
+      align="c")
+
+```
+
+**Best model unders these metrics?**
+
+ A graphical summary of the performance of the models in terms of accuracy and kappa is given in figure \ref{fig:bestModel}  using the function `resamples` from `caret`.
+
+In this case, the figure reflects how in general terms, the penalized logistic regression and the sparseLDA have better efficiency. Also, both approaches are more conservative in terms of high-quality sensibility and low-quality misclassification.
+
+In the case that we need to choose a model, the election on this stage will be the `sparseLDA` framework (Notice how higher values of accuracy and kappa are considered as outliers in the logistic regression).
+
+```{r bestModel, fig.cap = "Relation indepedent variables with dependent variable (Train data set)\\label{fig:bestModel}", echo=FALSE}
+models_compare = resamples(list(Penalized.Log.Reg = log_reg_model_3,
+                                 sparseLDA = lda_model_2,
+                                 stepQDA = qda_model_2,
+                                 NaiveBayes = nb_model_1))
+
+models_scales = list(x = list(relation = "free"), y = list(relation = "free"))
+bwplot(models_compare, scales = models_scales)
+
+```
+
+The confusion matrix for `sparseLDA` model is given in table 7.
+
+```{r echo=FALSE}
+CM_Stage1 <- as.matrix(lda_model_2_CM$table)
+
+knitr::kable(CM_Stage1,
+      caption = "CM sparseLDA Method",
+      align="c")
+```
+
+## Cost-Sensitive Learning:
+
+Considering a rigorous scenario where predicting high-quality wine is crucial for the interests of the company, the previous framework has several difficulties in predicting precisely the quality of the wines. As a result, we can simplify the amount of variance increasing the bias in the modeling process. Continuing with this line, we can proceed in two directions:
+
+a. **Reduce noise:** In this case, we will identify *High* wine quality from *No High* quality. As a result, we will combine the categories `Low` and `Medium` as a class `No High`. This new class has 5220 observations, with a proportion of 80.3% of the data set. The high-quality wine continues with the same number of observations (1277) from the previous models.
+
+Although it might be thought that the problem of the imbalance of high-quality wines continues, we have two aspects that could be considered as benefits with this new paradigm:
+
+1. We reduce the variance of the problem transforming the problem into a binary classification task.
+
+2. We can make use of the probabilities included in these modeling tools. The default configuration is to apply the Bayes rule, so we can modify this threshold.
+
+b. **Cost-sensitive learning:** In previous sections, we mention the relation between the price and the quality of the wine (High-quality wine is more expensive in the markets). Also, we can add the crucial importance of detecting high-quality wine for certificate the production of wine.
+
+```{r eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+# Charge to the environment. Do not show results and code
+# Redefine the table
+# New Categories
+wineQuality$quality.class <- factor(ifelse(wineQuality$quality.class == "High", "High", "No High"),
+                                    levels = c("No High","High"))
+
+set.seed(42)
+spl = createDataPartition(wineQuality$quality.class, p = 0.8, list = FALSE)  # 80% for training
+wineQuality.Train = wineQuality[spl,]
+wineQuality.Test = wineQuality[-spl,]
+rm(spl)
+```
+
+
+```{r echo=FALSE}
+lda_model_2_classes <- train.models[[1]]
+
+lda_model_2_classes_pred.test <-  predict(lda_model_2_classes, wineQuality.Test)
+lda_model_2_classes_CM <- confusionMatrix(lda_model_2_classes_pred.test,
+                                          wineQuality.Test$quality.class,
+                                          positive = "High")
+CM05 <- as.matrix(lda_model_2_classes_CM$table)
+
+```
+
+In relation to the first approach, if we transform the problem into a binary problem, the algorithm `sparseLDA` will have a general accuracy of `r round(100*lda_model_2_classes_CM$overall[1] ,2)`%. However, we must be cautious, because the sensitivity for this model is `r round(100*lda_model_2_classes_CM$byClass[1],2)`%. (This result is similar to all previous approaches). Moreover, table 8 shows the confusion matrix under this strategy.
+
+```{r echo=FALSE}
+knitr::kable(CM05,
+      caption = "CM sparseLDA Binary Problem",
+      align="c")
+```
+
+\newpage
+
+It is important to remember that the optimization criteria used for calculating the model that results in the confusion matrix of table 8, the threshold used was 0.5 in the probabilities.  So the problem becomes to determine an adequate threshold for resolving this framework. In the following table, the left side is the confusion matrix when the threshold is 0.25. On the other hand, the right side is the confusion matrix when the threshold is 0.75.
+
+```{r echo=FALSE}
+lda_model_2_classes_prob.test = predict(lda_model_2_classes, wineQuality.Test, type = "prob")
+threshold = 0.25
+#head(lda_model_2_classes_prob.test)
+
+lda_model_2_classes_pred.test_from_prob <- rep("No High", nrow(wineQuality.Test))
+
+lda_model_2_classes_pred.test_from_prob[which(lda_model_2_classes_prob.test[,2] > threshold)] = "High"
+lda_model_2_classes_pred.test_from_prob <- factor(lda_model_2_classes_pred.test_from_prob, levels = c("No High","High"))
+#head(lda_model_2_classes_pred.test_from_prob)
+lda_model_1_CM <- confusionMatrix(lda_model_2_classes_pred.test_from_prob, 
+                                  wineQuality.Test$quality.class,
+                                  positive = "High")
+
+CM2Model <- lda_model_1_CM
+CM2 <- as.matrix(CM2Model$table)
+
+##
+
+threshold = 0.75
+#head(lda_model_2_classes_prob.test)
+
+lda_model_2_classes_pred.test_from_prob <- rep("No High", nrow(wineQuality.Test))
+
+lda_model_2_classes_pred.test_from_prob[which(lda_model_2_classes_prob.test[,2] > threshold)] = "High"
+lda_model_2_classes_pred.test_from_prob <- factor(lda_model_2_classes_pred.test_from_prob, levels = c("No High","High"))
+#head(lda_model_2_classes_pred.test_from_prob)
+lda_model_1_CM <- confusionMatrix(lda_model_2_classes_pred.test_from_prob, 
+                                  wineQuality.Test$quality.class,
+                                  positive = "High")
+
+CM3Model <- lda_model_1_CM
+CM3 <- as.matrix(CM3Model$table)
+
+## Determine the profit
+relative.price <- c(0,-0.5,0.1,1)
+```
+
+```{r results='asis', echo=FALSE}
+    # Setting `results = 'asis'` allows for using Latex within the code chunk
+    cat('\\begin{center}')
+    # `{c c}` Creates a two column table
+    # Use `{c | c}` if you'd like a line between the tables
+    cat('\\begin{tabular}{ c c }')
+    print(knitr::kable(CM2, format = 'latex'))
+    # Separate the two columns with an `&`
+    cat('&')
+    print(knitr::kable(CM3, format = 'latex'))
+    cat('\\end{tabular}')
+    cat('\\end{center}')
+```
+
+When we decrease the threshold from 0.5 to 0.25, we can see how high-quality detection increases from 79 to 170 (An increase of 115%). However, the worst error increases considerably from 71 to 238 (235%). The accuracy under this approach is `r round(100*CM2Model$overall[1] ,2)`%.
+
+In the case of the increasing of the threshold from 0.5 to 0.75, the numbers of low and medium wine fitted as high-quality reduce from 71 to 4 (Decrease of 94%), but the correctly high-quality wine predicted to decrease from 79 to 16 (80%). The accuracy in this case is `r round(100*CM3Model$overall[1] ,2)`%.
+
+To solve this problem, we can use the *cost-sensitive* approach. Consider the following economic scenario:
+
+In wine markets, the price of high-quality wine is double in comparison with regular wine. The wine company wants to forecast the economic profit in case that all the wine products are predicted correctly and as result, it can be sold at the right price, taking as reference the price of the regular wine. (Consider the case that company makes their economic profit forecast under the assumption that all their wine has regular-quality.)
+
+As a result, if a regular quality wine is predicted as regular (`No High`), the profit will be zero. If a high-quality wine is predicted correctly, then the profit will increase by 1 unit. In the case of misclassification, consider the following scenarios:
+
+1. If a regular quality wine is predicted as high quality, the company will lose 0.5 units of the original price for high-quality wine.
+
+2. If a high-quality wine is predicted as regular-quality, the company eventually will win 0.5 monetary units. However, there is an opportunity cost of 0.4 monetary units. As a consequence, the company will obtain only 0.1 monetary units.
+
+A summary of these assumptions is given in table 9. The economic profit under the scenario using a threshold of 0.5 is `r sum(relative.price * CM05)`. With a threshold of 0.25, the economic profit will be `r sum(relative.price * CM2)` . In the case of a threshold of 0.75, the economic gain will be `r sum(relative.price * CM3)`.
+
+
+```{r echo=FALSE}
+Prediction_And_Reference <- c("No High", "High")
+No_High <- c(0,-0.5)
+High <- c(0.1,1)
+economic <- data.frame(Prediction_And_Reference,
+                              No_High,
+                              High)
+
+knitr::kable(economic,
+      caption = "Cost-sensity assumptions: Profit matrix",
+      align="c")
+
+```
+
+Figure \ref{fig:boxplot} shows the distribution of economic profits for different threshold values. We see that the maximum on the distribution is reached with a threshold value of 0.35.
+
+```{r boxplot, fig.cap = "Distribution threshold value (Based on 30 iterations in cv.)\\label{fig:boxplot}", echo=FALSE}
+superavit.i <- train.models[[2]]
+threshold_values <-  seq(0.15,0.75,0.05)
+boxplot(superavit.i, main = "Hyper-parameter selection",
+        ylab = "Superavit",
+        xlab = "threshold value",
+        names = threshold_values,col="royalblue2")
+```
+
+```{r eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+lda_model_2_classes_prob.test = predict(lda_model_2_classes, wineQuality.Test, type = "prob")
+threshold = 0.35
+
+lda_model_2_classes_pred.test_from_prob <- rep("No High", nrow(wineQuality.Test))
+
+lda_model_2_classes_pred.test_from_prob[which(lda_model_2_classes_prob.test[,2] > threshold)] = "High"
+lda_model_2_classes_pred.test_from_prob <- factor(lda_model_2_classes_pred.test_from_prob, levels = c("No High","High"))
+lda_model_1_CM <- confusionMatrix(lda_model_2_classes_pred.test_from_prob, 
+                                  wineQuality.Test$quality.class,
+                                  positive = "High")
+
+CM2Model <- lda_model_1_CM
+CM2 <- as.matrix(CM2Model$table)
+```
+
+With this value, the confusion matrix is given in table 10. The economic profit will be `r sum(relative.price * CM2)`. General accuracy of the model is `r round(100*CM2Model$overall[1] ,2)`%, with a sensitivity of `r round(100*CM2Model$byClass[1],2)`%.
+
+```{r echo=FALSE}
+knitr::kable(CM2,
+      caption = "CM sparseLDA with 0.35 threshold",
+      align="c")
+```
+
+## Conclusions
+
+The goal of this project was to predict high-quality wine based on the chemical properties of the two categories of wine. However, the model failed to predict with a high precision the range of the wine. These failures can be explained possible for three factors:
+
+1. At each quality level, the variability of the independent variables is high. Based on figure \ref{fig:classif1}, we can observe several outliers, especially in the variables *Fixed acidity*, *volatile acidity*, and *sulphates*. Also, we can see how *alcohol* has an irregular distribution. For the `low`  quality category, there is a lot of observations considered as outliers. As a result, the net effect of the distribution of `low`, `medium`, and `high` quality wine is the same.
+
+2. The quality wine groups are not well separated for the predictor variables.  Again, the boxplots in figure \ref{fig:classif1} show how the distribution of the chemical properties are relatively the same for each wine quality category.
+
+3. Probably, the wine quality is also related to other variables, beyond the chemical properties of the wine. For example, the variety of grapes, time, and materials used for fermenting the product can also affect the quality of the wine and its flavour. This data set does not have variables related to these factors. Then, there is a hidden variance provided by the data generating process that the models used in this project will not be able to take into account.
+
+Finally, increasing the predictive capacity of the models has the effect of increasing the bias of the results, obtaining as a result *precise* models with almost 80 of accuracy. However, these results can be taken with caution. In the last part of the project, the criteria used to determine the best model was the economic profit of the company. Notwithstanding, these approaches cause the increase of the regular quality wine fitted as high quality. Maybe this can be useful from the perspective of the company, but on the other side of the market, customers can receive the wine of regular quality promoted as high quality. As a result, in the long run, it can affect the image and reputation of the company.
