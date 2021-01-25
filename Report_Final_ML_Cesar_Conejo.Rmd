@@ -1,0 +1,669 @@
+---
+title: "Report Final Machine Learning Methods"
+author: "Cesar Conejo Villalobos"
+date: "1/24/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache=TRUE,message=FALSE, warning=FALSE)
+knitr::opts_chunk$set(set.seed(42))
+knitr::opts_chunk$set(fig.width=6, fig.height=3)
+
+# Load libraries
+
+library(tidyverse)
+library(caret)
+library(MASS)
+library(knitr)
+library(pROC)
+
+# Load the dataset and models
+
+load('rda/wineQuality.rda')
+load('rda/train_models_3class_ML.rda')
+source('functions/draw_functions.R')
+
+
+# Create mode function
+mode <- function(v) {
+  uniqv <- unique(v)
+  uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+
+
+
+```
+
+## 1. Introduction
+
+In this project, we continue with the study of the Portuguese Vinho Verde wine data set. The file includes 1599 observations of red wine and 4898 of white wine. The response variable of the original data set was `quality`, a continuous variable with a scale from 0 to 10 that denotes que quality taste given by three wine experts. On the other hand, the covariates variables correspond to the chemical properties associated with the wine. 
+
+In order to refresh the variables of the data set, the following output shows a review of the variables for the complete data set.
+
+```{r echo=FALSE}
+# Original Data set
+glimpse(wineQuality)
+```
+
+As in the middle term task, the goal of this project is to predict the quality of the wine based on these chemical properties.
+
+From the first task, we showed how the proportions of observations of each category were unbalanced. As consequence, linear regression methods were not able to predict accurately the quality of the wine on the scale from 0 to 10.
+
+Moreover, the previous data preprocessing of the data reflected some fact that it becomes necessary to remember:
+
+* The category of wine (red or white) does not define an important factor for determining the quality.
+
+* The variables `alcohol`, `density`, and `residual.sugar` were the variable more important for defining the quality of the wine.
+
+* The covariates were mostly independent, without a significant correlation between them. 
+
+Then, we transform the problem from regression to classification. We created a new variable with three categories called `quality.class` with the distribution given in table 1.
+
+```{r echo=FALSE}
+# Transformation: 
+
+wineQuality$quality.class <- factor(ifelse(wineQuality$quality < 6, "Low",
+                                           ifelse(wineQuality$quality < 7, "Medium", "High")), 
+                                    levels = c("Low", "Medium", "High"))
+wineQuality$quality <- NULL
+
+set.seed(42)
+spl <- createDataPartition(wineQuality$quality.class, p = 0.8, list = FALSE)  # 80% for training
+wineQuality.Train <- wineQuality[spl,]
+wineQuality.Test  <- wineQuality[-spl,]
+rm(spl)
+
+tb <- wineQuality %>% count(quality.class) %>% mutate(p = round(prop.table(n),2))
+colnames(tb) <- c("Quality class", "Count", "Proportion")
+
+knitr::kable(tb,
+             row.names = FALSE,
+             caption = "Count and Proportion (in %) of quality of wine categories",
+             align="c")
+rm(tb)
+```
+
+Additionally, The key metrics defined in the previous task were:
+
+1. Global Accuracy:  General accuracy of the predictive capability of the model.
+
+2. High-quality sensitivity: Percentage of high-quality wine fitted correctly.
+
+3. The number of low-quality misclassification: Nominal value of low-quality predicted as high-class. 
+
+For this task, we continue with these key-metrics. However, we will introduce some changes:
+
+1. Instead of using only the global accuracy, we also will take a look at the kappa metric. This metric can give more details about the predictive power of a specific model, especially in the classification task with 3 categories. 
+
+2. In the classification problem with 3 categories, the high-quality classification is given by the sensitivity (High-quality wine predicted correctly divided by the total number of high-quality wine). However, in the classification task with two classes, this ratio is given by the specificity. As a result, we must be aware of this fact! 
+
+Moreover, in the previous task we considered a rigorous scenario where predicting high-quality wine was crucial for the interest of the company. As a result, we developed to exercises:
+
+1. Reduction of noise: The goal in this scenario is to detect *high quality* wine from *No high* quality.  So, we convert the classification problem into a binary exercise combining the classes *low* and *medium* as *Regular* wine quality.
+
+2. Cost-Sensitive learning: We go deep into the relationship between high-quality wine and price. In markets, the price of high-quality wine is double in comparison to regular wine. Based on this data set, the company desires to forecast the economic profit in case that all the wine products were fitted correctly. 
+
+```{r echo=FALSE}
+Prediction_And_Reference <- c("Regular", "High")
+No_High <- c(0,-0.5)
+High <- c(0.1,1)
+economic <- data.frame(Prediction_And_Reference,
+                              No_High,
+                              High)
+
+knitr::kable(economic,
+      caption = "Cost-sensitivity assumptions: Profit matrix",
+      align="c")
+rm(Prediction_And_Reference,No_High,High,economic)
+```
+
+Finally, in task 1, the analyzed methods were statistical learning frameworks. The model with the best performance in that task was the `sparseLDA`. 
+
+Now, in this second task, we introduce the following machine learning methods:
+
+1. k-nearest neighbors (KNN)
+2. Support Vector Machines (SVM)
+3. Random Forest (RF)
+4. Gradient Boosting (xgb)
+5. Neural Networks (nn)
+6. Ensemble methods
+
+\newpage
+
+The general idea is to determine how these machine learning methods perform in the task of predicting the quality class of wine. In order to compare the performance and effectiveness of these new frameworks, we will use the best-fitted model in the previous task,  `sparseLDA` as the **Benchmark** model.
+
+## 2. Data Splitting
+
+The first step for training the models and avoid any data leakage is to split the data set into training and testing sets. In this case, we use the caret function `createDataPartition()` with 80% for training and 20% for testing. 
+
+Then, we proceed with the training and hyper-parameter tuning of the models.  For this task, we use the function `train()` using cross-validation with 5 repeats of 10-fold cross-validation. However, we continue with two different strategies for the 3 categories and binary classification task.
+
+* In the case of classification in 3 categories of the quality type of wine, the metric used for optimizing the models was the `accuracy`.
+
+* In the case of binary classification, The most important element for this task is predicting the greatest amount of good quality wine. It is for this reason that the metric `specificity`  and the train control `summaryFunction = twoClassSummary` is used for optimizing the algorithms and to detect the highest quantity of good quality wine.  	Additionally, we performance another process of training, but optimizing the `EconomicProfit` for the best model of the previous analysis.
+
+## 3. Classification problem: Three wine quality class
+
+```{r eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+# Set all R code needee here!
+
+lda_model <- train_models_3class[[1]]
+lda_model_pred.test = predict(lda_model, wineQuality.Test)
+lda_model_CM <- confusionMatrix(lda_model_pred.test,wineQuality.Test$quality.class)
+rm(lda_model_pred.test)
+
+knn_model <- train_models_3class[[2]]
+knn_model_pred.test = predict(knn_model, wineQuality.Test)
+knn_model_CM <- confusionMatrix(knn_model_pred.test,wineQuality.Test$quality.class)
+rm(knn_model_pred.test)
+
+SVM_model <- train_models_3class[[3]]
+SVM_model_pred.test = predict(SVM_model, wineQuality.Test)
+SVM_model_CM <- confusionMatrix(SVM_model_pred.test,wineQuality.Test$quality.class)
+#rm(SVM_model_pred.test)
+
+RF_model <- train_models_3class[[4]]
+RF_model_pred.test = predict(RF_model, wineQuality.Test)
+RF_model_CM <- confusionMatrix(RF_model_pred.test,wineQuality.Test$quality.class)
+#rm(RF_model_pred.test)
+
+xgb_model <- train_models_3class[[5]]
+xgb_model_pred.test = predict(xgb_model, wineQuality.Test)
+xgb_model_CM <- confusionMatrix(xgb_model_pred.test,wineQuality.Test$quality.class)
+#rm(xgb_model_pred.test)
+
+nn_model <- train_models_3class[[6]]
+nn_model_pred.test = predict(nn_model, wineQuality.Test)
+nn_model_CM <- confusionMatrix(nn_model_pred.test,wineQuality.Test$quality.class)
+rm(nn_model_pred.test)
+
+#dnn_model <- train_models_3class[[6]] #it 7
+#dnn_model_pred.test = predict(dnn_model, wineQuality.Test)
+#dnn_model_CM <- confusionMatrix(dnn_model_pred.test,wineQuality.Test$quality.class)
+#rm(dnn_model_pred.test)
+
+ensemble.pred = apply(data.frame(RF_model_pred.test, xgb_model_pred.test, SVM_model_pred.test), 1, mode) 
+ensemble.pred <- factor(ensemble.pred, levels = c("Low", "Medium", "High"))
+ensemble_model_CM = confusionMatrix(ensemble.pred, wineQuality.Test$quality.class)
+
+#Methods <- c("sparseLDA","knn", "SVM", "RF", "xgb", "nn", "dnn", "Ensemble")
+Methods <- c("sparseLDA","knn", "SVM", "RF", "xgb", "nn", "Ensemble")
+
+Accuraracy <- c(round(100*lda_model_CM$overall[1],2),
+                round(100*knn_model_CM$overall[1],2),
+                round(100*SVM_model_CM$overall[1],2),
+                round(100*RF_model_CM$overall[1],2),
+                round(100*xgb_model_CM$overall[1],2),
+                round(100*nn_model_CM$overall[1],2),
+               # round(100*dnn_model_CM$overall[1],2),
+                round(100*ensemble_model_CM$overall[1],2))
+
+kappa <- c(round(100*lda_model_CM$overall[2],2),
+           round(100*knn_model_CM$overall[2],2),
+           round(100*SVM_model_CM$overall[2],2),
+           round(100*RF_model_CM$overall[2],2),
+           round(100*xgb_model_CM$overall[2],2),
+           round(100*nn_model_CM$overall[2],2),
+           #round(100*dnn_model_CM$overall[2],2),
+           round(100*ensemble_model_CM$overall[2],2))
+
+High.Sensitivity <- c(round(100*lda_model_CM$byClass[3,1],2),
+                      round(100*knn_model_CM$byClass[3,1],2),
+                      round(100*SVM_model_CM$byClass[3,1],2),
+                      round(100*RF_model_CM$byClass[3,1],2),
+                      round(100*xgb_model_CM$byClass[3,1],2),
+                      round(100*nn_model_CM$byClass[3,1],2),
+                      #round(100*dnn_model_CM$byClass[3,1],2),
+                      round(100*ensemble_model_CM$byClass[3,1],2))
+
+Worst.Error <- c(lda_model_CM$table[3,1],
+                 knn_model_CM$table[3,1],
+                 SVM_model_CM$table[3,1],
+                 RF_model_CM$table[3,1],
+                 xgb_model_CM$table[3,1],
+                 nn_model_CM$table[3,1],
+                 #dnn_model_CM$table[3,1],
+                 ensemble_model_CM$table[3,1])
+
+summary.methods <- data.frame(Methods,
+                              Accuraracy,
+                              kappa,
+                              High.Sensitivity,
+                              Worst.Error,
+                              row.names = NULL)
+rm(Methods,kappa,Accuraracy,High.Sensitivity,Worst.Error)
+
+set.seed(42)
+models_compare = resamples(list(sparseLDA = lda_model,
+                                knn = knn_model,
+                                SVM = SVM_model,
+                                RF = RF_model,
+                                xgb = xgb_model,
+                                nn = nn_model))#,
+                                #dnn = dnn_model))
+```
+
+Under the scheme explained in the previous sections, table 3 provides the key metrics of the models. In the case of `sparseLDA`, the accuracy attached is 54%, with 36% of high wine quality predicted accurately. 
+
+```{r echo=FALSE}
+knitr::kable(summary.methods,
+      caption = "Metrics for Benchmarrk and ML methods",
+      align="c")
+```
+
+In relation to the machine learning methods, we distinguish two groups:
+
+* First, methods such as `knn` and `nn` have a performance similar to the benchmark.  In terms of accuracy, these frameworks continue to possess limited predicted power.
+
+* In the second group, we start to see accuracy metrics in the range from 60% to 70%. In general models, these methods can be used as a naive estimator of the accuracy of quality class.  However, in terms of kappa metric, only random Forest has a value superior to 50%, which is considered as no high.
+
+If we focus on the high-quality sensibility, the efficiency continues been below 60% for all the models. In conclusion, both statistical and machine learning methods continue with problems in the task of using the chemical properties of the wine in order to be able to identify the high-quality wine class.
+
+The figure \ref{fig:class3} reflects the distribution of `accuracy` and `kappa` metrics based on the function `resamples`. As in the previous comments, Random Forest is the algorithm with the best fulfillment. But, the figure reflects another advantage of Random Forest in comparison with the method of gradient boosting. We can observe how the former algorithm is more robust in comparison with the `xgb` frameworks, which for some resamples, the metrics can be extraordinarily high.
+
+```{r class3, fig.cap = "Accuracy and Kappa for Benchmartk and ML methods\\label{fig:class3}", echo=FALSE}
+models_scales = list(x = list(relation = "free"), y = list(relation = "free"))
+bwplot(models_compare, scales = models_scales, main = "Metrics for classiffication: 3 classes")
+```
+
+Additionally, the last line of table 3 contains information on an ensemble method. This ensemble consists of the three models with performance, specifically, `Random Forest`, `xgboost`, and  `SVM` Support Vector Machine. However, we observe how the general realization of the model is almost the average of the previous models. This is due to the correlation between the fitted values is considerably high.
+
+In the case of analyzing the feature importance of the variable under the machine learning methods, we can take Random Forest has the algorithm reference. Figure  \ref{fig:class3varImpRF} highlights variables `alcohol` and `density` for predicting the class of the wine in the figure. However, we identify also the influence of the variable `volatile.acidity`. It differs from the benchmark model, where `residual.sugar` had more influence in fitting the class of wine.
+
+```{r class3varImpRF, fig.cap = "Importance of features in Random Forest Calibration\\label{fig:class3varImpRF}", echo=FALSE}
+RF_model_imp <- varImp(RF_model, scale = F)
+plot(RF_model_imp, scales = list(y = list(cex = .95)))
+```
+
+Finally, the confusion matrix for the Random Forest is given in table 4. In relation to the benchmark model, the detection of high-quality wine increases 65% passing from 92 to 152 high-quality wine predicted accurately.
+
+```{r echo=FALSE}
+CM_RF_3 <- as.matrix(RF_model_CM$table)
+
+knitr::kable(CM_RF_3,
+      caption = "CM RandomForest",
+      align="c")
+rm(CM_RF_3)
+```
+
+\newpage
+
+## 4. Binary classification
+
+We divided this section into three segments. First, we proceed with the optimization of the Specificity. 
+
+In the second part, we start to consider the threshold of the prediction categories. We know that in the scheme used in the previous training, the Bayes rule is used. So, we explore the ROC curve for the method with the best performance in the first part.
+
+Finally, under the scenario of cost-sensitive learning, we optimize the training method considering the cost of the classification showed in table 2.
+
+### 4.1 Specificity optimization
+
+```{r eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+rm(train_models_3class)
+
+
+# Binary categories
+wineQuality$quality.class <- factor(ifelse(wineQuality$quality.class == "High", "High", "Regular"),
+                                    levels = c("Regular","High"))
+
+
+set.seed(42)
+spl = createDataPartition(wineQuality$quality.class, p = 0.8, list = FALSE)  # 80% for training
+wineQuality.Train = wineQuality[spl,]
+wineQuality.Test = wineQuality[-spl,]
+rm(spl)
+
+load('rda/train_models_2class_ML.rda')
+
+## LDA
+lda_model_2_class <- train_models_2class[[1]]
+lda_model_2_class_pred.test <-  predict(lda_model_2_class, wineQuality.Test)
+lda_model_2_class_CM <- confusionMatrix(lda_model_2_class_pred.test,
+                                          wineQuality.Test$quality.class)
+
+## KNN
+knn_model_2_class <- train_models_2class[[2]]
+knn_model_2_class_pred.test = predict(knn_model_2_class, wineQuality.Test)
+knn_model_2_class_CM <- confusionMatrix(knn_model_2_class_pred.test, 
+                                        wineQuality.Test$quality.class)
+#rm(knn_model_2_class_pred.test)
+
+
+
+## SVM
+SVM_model_2_class <- train_models_2class[[3]]
+SVM_model_2_class_pred.test = predict(SVM_model_2_class, wineQuality.Test)
+SVM_model_2_class_CM <- confusionMatrix(SVM_model_2_class_pred.test,
+                                        wineQuality.Test$quality.class)
+rm(SVM_model_2_class_pred.test)
+
+
+##RF
+
+RF_model_2_class <- train_models_2class[[4]]
+RF_model_2_class_pred.test = predict(RF_model_2_class, wineQuality.Test)
+RF_model_2_class_CM <- confusionMatrix(RF_model_2_class_pred.test,
+                                       wineQuality.Test$quality.class)
+#rm(RF_model_2_class_pred.test)
+
+
+# Variable importance
+#RF_model_2_class_imp <- varImp(RF_model_2_class, scale = F)
+#plot(RF_model_2_class_imp, scales = list(y = list(cex = .95)))
+
+## GradientBoosting
+
+xgb_model_2_class <- train_models_2class[[5]]
+xgb_model_2_class_pred.test = predict(xgb_model_2_class, wineQuality.Test)
+xgb_model_2_class_CM <- confusionMatrix(xgb_model_2_class_pred.test,
+                                        wineQuality.Test$quality.class)
+#rm(xgb_model_2_class_pred.test)
+
+
+## NN
+nn_model_2_class <- train_models_2class[[6]]
+nn_model_2_class_pred.test = predict(nn_model_2_class, wineQuality.Test)
+nn_model_2_class_CM <- confusionMatrix(nn_model_2_class_pred.test,
+                                       wineQuality.Test$quality.class)
+rm(nn_model_2_class_pred.test)
+
+
+
+## DNN
+#dnn_model_2_class <- train_models_2class[[6]]
+#dnn_model_2_class_pred.test = predict(dnn_model_2_class, wineQuality.Test)
+#dnn_model_2_class_CM <- confusionMatrix(dnn_model_2_class_pred.test,
+#                                        wineQuality.Test$quality.class)
+#rm(dnn_model_2_class_pred.test)
+
+
+
+# wINNER METHODS: RF/xgb/knn
+
+ensemble.pred = apply(data.frame(RF_model_2_class_pred.test, xgb_model_2_class_pred.test, knn_model_2_class_pred.test), 1, mode) 
+ensemble.pred <- factor(ensemble.pred, levels = c("Regular", "High"))
+ensemble_2_class_model_CM = confusionMatrix(ensemble.pred, wineQuality.Test$quality.class)
+
+# Summary # Ranking of the best model here!
+
+#Methods <- c("sparseLDA","knn", "SVM", "RF", "xgb", "nn", "dnn", "Ensemble")
+Methods <- c("sparseLDA","knn", "SVM", "RF", "xgb", "nn", "Ensemble")
+
+Accuraracy <- c(round(100*lda_model_2_class_CM$overall[1],2),
+                round(100*knn_model_2_class_CM$overall[1],2),
+                round(100*SVM_model_2_class_CM$overall[1],2),
+                round(100*RF_model_2_class_CM$overall[1],2),
+                round(100*xgb_model_2_class_CM$overall[1],2),
+                round(100*nn_model_2_class_CM$overall[1],2),
+                #round(100*dnn_model_2_class_CM$overall[1],2),
+                round(100*ensemble_2_class_model_CM$overall[1],2))
+
+kappa <- c(round(100*lda_model_2_class_CM$overall[2],2),
+           round(100*knn_model_2_class_CM$overall[2],2),
+           round(100*SVM_model_2_class_CM$overall[2],2),
+           round(100*RF_model_2_class_CM$overall[2],2),
+           round(100*xgb_model_2_class_CM$overall[2],2),
+           round(100*nn_model_2_class_CM$overall[2],2),
+           #round(100*dnn_model_2_class_CM$overall[2],2),
+           round(100*ensemble_2_class_model_CM$overall[2],2))
+
+Specificity <- c(round(100*lda_model_2_class_CM$byClass[2],2),
+                 round(100*knn_model_2_class_CM$byClass[2],2),
+                 round(100*SVM_model_2_class_CM$byClass[2],2),
+                 round(100*RF_model_2_class_CM$byClass[2],2),
+                 round(100*xgb_model_2_class_CM$byClass[2],2),
+                 round(100*nn_model_2_class_CM$byClass[2],2),
+                 #round(100*dnn_model_2_class_CM$byClass[2],2),
+                 round(100*ensemble_2_class_model_CM$byClass[2],2))
+
+Worst.Error <- c(lda_model_2_class_CM$table[1,2],
+                 knn_model_2_class_CM$table[1,2],
+                 SVM_model_2_class_CM$table[1,2],
+                 RF_model_2_class_CM$table[1,2],
+                 xgb_model_2_class_CM$table[1,2],
+                 nn_model_2_class_CM$table[1,2],
+                 #dnn_model_2_class_CM$table[1,2],
+                 ensemble_2_class_model_CM$table[1,2])
+
+summary.methods <- data.frame(Methods,
+                              Accuraracy,
+                              kappa,
+                              Specificity,
+                              Worst.Error,
+                              row.names = NULL)
+rm(Methods,kappa,Accuraracy,Specificity,Worst.Error)
+
+models_compare = resamples(list(sparseLDA = lda_model_2_class,
+                                knn = knn_model_2_class,
+                                SVM = SVM_model_2_class,
+                                RF = RF_model_2_class,
+                                xgb = xgb_model_2_class,
+                                nn = nn_model_2_class)) #,
+                                #dnn = dnn_model_2_class))
+
+```
+
+Similar to the three quality cluster classification, we can consider the binary problem of identifying high-quality wine from the other two groups. Table 5 reflects the key metrics for this approach. Under this scenario, our Benchmark model has an accuracy approximately of 81%. Nevertheless, the **specificity** (High-quality wine detected accurately) is still low. 
+
+Similar to the previous exercise, `Random Forest` has the best performance. However, it is important to notice how the method `knn` the second better percentage of detection of high-quality wine. Algorithm `xgboost` completes the rank of the best first three models.
+
+```{r echo=FALSE}
+knitr::kable(summary.methods,
+      caption = "Metrics for Benchmark and ML methods",
+      align="c")
+```
+
+\newpage
+
+The representation in figure \ref{fig:class2} is evidence of the method of training of this method under the scheme `twoClassSummary` in Caret. The right panel of figure 3 reflects the sampling of the specificity. The left panel shows the Area under the curve for the models. In this case, Random Forest, `xgboost`, and Support Vector Machines has the better metrics value.
+
+```{r class2, fig.cap = "Accuracy and Kappa for Benchmartk and ML methods\\label{fig:class2}", echo=FALSE}
+models_scales = list(x = list(relation = "free"), y = list(relation = "free"))
+bwplot(models_compare, scales = models_scales, main = "Metrics for  Binary classification")
+```
+
+On the other hand, taking as reference the Random Forest algorithm, figure \ref{fig:class2varImpRF} reflects the feature importance in the training of the models. We notice how the variable `alcohol` is the most relevant feature for fitting the quality wine. Another important aspect is to considerer how the `density` covariate has no relevant paper in this algorithm, in contrast with the statistical learning methods and even in the problem of three quality classes of wine.
+
+```{r class2varImpRF, fig.cap = "Importance of features in Random Forest Binary Classification\\label{fig:class2varImpRF}", echo=FALSE}
+RF_model_2_class_imp <- varImp(RF_model_2_class, scale = F)
+plot(RF_model_2_class_imp, scales = list(y = list(cex = .95)))
+```
+
+\newpage
+
+Figure \ref{fig:cmRFBY} shows the confusion matrix of the Random Forest Algorithm. In this case, the accuracy and kappa values are enough for considering a model with good predictive power. However, the specificity value of 61% in the detection of high-quality can make the decision-maker explore other alternatives to have a better prediction of the wine products. We will explore two ways of improving our previous results.
+
+```{r cmRFBY, fig.cap = "CM with Bayes Rule optimization\\label{fig:cmRFBY}", echo=FALSE}
+draw_confusion_matrix(cm = RF_model_2_class_CM, 
+                      Class1 = "Regular", 
+                      Class2 = "High", 
+                      title_def = 'Confusion Matrix: RF with Bayes Rule')
+
+```
+
+### 4.2 ROC curve
+
+```{r eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+RF_model_2_class_prob.test = predict(RF_model_2_class, wineQuality.Test, type = "prob")
+threshold = 0.25
+RF_model_2_class_prob_pred.test <- rep("Regular", nrow(wineQuality.Test))
+RF_model_2_class_prob_pred.test[which(RF_model_2_class_prob.test[,2] > threshold)] = "High"
+RF_model_2_class_prob_pred.test <- factor(RF_model_2_class_prob_pred.test, levels = c("Regular","High"))
+RF_model_2_class_CM_prob <- confusionMatrix(RF_model_2_class_prob_pred.test, 
+                                  wineQuality.Test$quality.class)
+```
+
+The  confusion matrix in figure \ref{fig:cmRFBY} is the result of applying the Bayes rule as optimization criteria for fitting the categories of high and regular wine. 
+
+Additionally, we focus on the relevance of the specificity to have a well accurate model. Figure \ref{fig:ROCRF} represents the ROC and AUC for the random forest model. In general terms, the ROC curve can improve the model considering the best balance between sensitivity and specificity. 
+
+We notice in this case, how a threshold of 0.25 is reasonable for predicting better the high -quality wine. This threshold is a reflection of the proportion of high-quality wine in the data set, which corresponds to 20% of all the observations.
+
+```{r ROCRF, fig.cap = "ROC and AUC for RandomForest\\label{fig:ROCRF}", echo=FALSE}
+plot.roc(wineQuality.Test$quality.class, 
+         RF_model_2_class_prob.test[,2],
+         col="darkblue", 
+         print.auc = TRUE, 
+         auc.polygon=TRUE, 
+         grid=c(0.1, 0.2),
+         grid.col=c("green", "red"), 
+         max.auc.polygon=TRUE,
+         auc.polygon.col="lightblue", 
+         print.thres=TRUE)
+```
+
+Figure \ref{fig:cmROC} reflects the confusion matrix of the random Forest. We notice how the metrics values of `accuracy` and `kappa` continue to be satisfactory. The sensitivity downs 14% passing from 94% to 80.7%. However, under this model, it is no the worst error. We can decrease the sensitivity in order to predict high-quality wine. In this case, the specificity increases 35% increasing from 61.2% to 82.7%. This change represents only 44 high-quality wrongly fitted.
+
+```{r cmROC, fig.cap = "CM recommended threshold given by ROC\\label{fig:cmROC}", echo=FALSE}
+draw_confusion_matrix(cm = RF_model_2_class_CM_prob, 
+                      Class1 = "Regular", 
+                      Class2 = "High", 
+                      title_def = 'Confusion Matrix: RF with Threshold 0.25')
+
+```
+
+As a result, we can consider this approach has a good fitting in the classification problem, However, in order to have these metrics, we increase in several aspects the bias in the calibration of these algorithms
+
+Finally, we can also ask if this is the best model possible under these assumptions. To respond to this question, we can use some techniques relates to cost-sensitive learning.
+
+\newpage
+
+### 4.3 Cost Sensitive learning
+
+```{r eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+# Charge to the enviroment. Do not show results and code
+load('rda/train_models_2class_econProfit_ML.rda')
+
+price <- c(0,-0.5,0.1,1)
+
+RF_CM_BYR <- RF_model_2_class_CM$table
+RF_CM_THR <- RF_model_2_class_CM_prob$table
+
+
+
+# Optimal values of economic profit
+RF_model_2_class_econProfit <- train_models_2class_econProfit[[1]]
+RF_model_2_class_pred.test.econProfit <- predict(RF_model_2_class_econProfit,
+                                                 newdata = wineQuality.Test)
+
+caretCM_RF_ECONPROFIT = confusionMatrix(factor(RF_model_2_class_pred.test.econProfit), 
+                     wineQuality.Test$quality.class)
+
+RF_CM_econProfit = caretCM_RF_ECONPROFIT$table
+RF_profit = sum(as.vector(RF_CM_econProfit)*price)
+
+
+# What hapens if we change the threshold of ROC in the optimized algorithm
+threshold = 0.25
+RF_model_2_class_prob_econProfit.test = predict(RF_model_2_class_econProfit, 
+                                                wineQuality.Test, 
+                                                type = "prob")
+RF_model_2_class_prob_pred_econProfit.test <- rep("Regular", nrow(wineQuality.Test))
+RF_model_2_class_prob_pred_econProfit.test[which(RF_model_2_class_prob_econProfit.test[,2] > threshold)] = "High"
+RF_model_2_class_prob_pred_econProfit.test <- factor(RF_model_2_class_prob_pred_econProfit.test, levels = c("Regular","High"))
+RF_model_2_class_CM_prob_econProfit025 <- confusionMatrix(RF_model_2_class_prob_pred_econProfit.test, 
+                                                       wineQuality.Test$quality.class)$table
+
+
+# optimal values other methods
+xgb_model_2_class_econProfit <- train_models_2class_econProfit[[2]]
+knn_model_2_class_econProfit <- train_models_2class_econProfit[[3]]
+SVM_model_2_class_econProfit <- train_models_2class_econProfit[[4]]
+
+
+# optimal BYR
+xgb_model_2_class_pred.test.econProfit <- predict(xgb_model_2_class_econProfit,
+                                                 newdata = wineQuality.Test)
+xgb_CM = confusionMatrix(factor(xgb_model_2_class_pred.test.econProfit), 
+                        wineQuality.Test$quality.class)$table
+xgb_profit = sum(as.vector(xgb_CM)*price)
+#xgb_profit
+
+
+# optimal BYR
+knn_model_2_class_pred.test.econProfit <- predict(knn_model_2_class_econProfit,
+                                                  newdata = wineQuality.Test)
+knn_CM = confusionMatrix(factor(knn_model_2_class_pred.test.econProfit), 
+                         wineQuality.Test$quality.class)$table
+knn_profit = sum(as.vector(knn_CM)*price)
+#knn_profit
+
+
+# optimal BYR
+SVM_model_2_class_pred.test.econProfit <- predict(SVM_model_2_class_econProfit,
+                                                  newdata = wineQuality.Test)
+SVM_CM = confusionMatrix(factor(xgb_model_2_class_pred.test.econProfit), 
+                         wineQuality.Test$quality.class)$table
+SVM_profit = sum(as.vector(xgb_CM)*price)
+#SVM_profit
+
+```
+
+
+Considering as reference the economic scenario showed in table 2 in the introduction, the benchmark model `sparseLDA` obtained the following results:
+
+* Under the Bayes rule (Similar to approach 1), the economic profit was `r sum(price * lda_model_2_class_CM$table)` monetary units.
+
+* Then, an optimal threshold of 0.35 was used for maximizing the profit of the company. With this threshold, the profit increased to 67.4
+
+Taking as reference the previous values, the economic profit for the algorithm of Random Forest using a Bayes Rule is `r sum(price * RF_CM_BYR)`. So, by only using a better tool for predicting, we increase the economic profit by 106%.  In case that we use the threshold given by the ROC curve, the economic profit decreased to `r sum(price * RF_CM_THR)`. 
+
+As consequence, we make another process of training, but in this case, the goal will be to optimize the economic profit of the company. So, in the training of this process, we used a metric with a created function called `economicProfit` that should be maximized. Figure \ref{fig:cmRFEconProfit} shows the confusion matrix under this paradigm. The economic profit is in this case  `r RF_profit` monetary units.
+
+```{r cmRFEconProfit, fig.cap = "CM for maximum value in Economic Profit\\label{fig:cmRFEconProfit}", echo=FALSE}
+draw_confusion_matrix(cm = caretCM_RF_ECONPROFIT, 
+                      Class1 = "Regular", 
+                      Class2 = "High", 
+                      title_def = 'CM: RF optimal Economic profit')
+
+```
+
+We must notice in the metrics values of the confusion matrix, and especially `specificity` are closer to the values given by the Bayes rule in the first approach of the binary classification. We must notice that under this optimization, the training processed is designed for optimizing the economic profit using the Bayes Rule. In case that we use the threshold given by the ROC curve, the economic profit will be `r sum(RF_model_2_class_CM_prob_econProfit025*price)` monetary units.
+
+Finally, the economic profit under other methods are:
+
+* xgboosting: `r xgb_profit`.
+
+* KNN: `r knn_profit`.
+
+* SVM: `r SVM_profit`.
+
+All this values are considerably low in comparison with the profit given by Random Forest, even using a no optimal threshold as 0.25 in this algorithm.
+
+\newpage
+
+## 5. Conclusions 
+
+The general idea behind the middle and final project is to contrast the efficiency and predictive power of the tools provided by statistical learning and machine learning frameworks. In the case of the former, these tools have the benefit of classifying the clusters without significant loss in the interpretation of the procedures. In the case of Machine Learning tools, this interpretation of the procedures is lost. However, there is an improvement in terms of the predicted power of the algorithms.
+
+In particular, under this particular data set, all the machine learning methods outperform the best statistical model calibrated in part 1 that was used as the benchmark model. However, this improvement is not enough to consider the models as satisfactory in the case of the classification of wine categories into the groups `Low`, `Middle` and `High` quality.
+
+As a consequence, techniques that increase the bias of the models, such as reducing noise by converting the original problem to one of binary classification where the main objective is to distinguish wine of high-quality and cost-sensitive learning are used.
+
+Another important aspect that should be considered in the model calibration process is how much global information is available in order to fit the best possible model. In this case, and focusing on the binary classification process, the first estimator is using the Bayes Rule with a threshold of 0.5. This scheme works reasonably well when the groups to be classified are balanced and the cost of classification errors is reasonably similar.
+
+However, we can get a better threshold that provides the least amount of misclassifications. In this case, the ROC curve offers a representation of the best threshold between sensitivity and specificity. If no more information is available (especially on the costs of errors), this may be the appropriate model.
+
+Nevertheless, in case there is information on the possible costs, the algorithms can be modified so that the hyper-parameters point towards the optimization of the profit. In this particular case, the Random Forest model with the parameter given by the curve, the sensitivity and specificity values are both above 80%. However, when the economic benefit is considered, we see that the cost of the wrong classification of regular wine has the highest cost so that the new scheme tends to minimize this error.
+
+## 6. Note: GitHub Link
+
+In my Github repository [https://github.com/cconejov](https://github.com/cconejov/UC3M_Statistical_Learning) there is the detail of all the `R` raw code used in both projects. Especially, in the folder `scripts` is all the raw code that calibrates and train all the models.
+
+The training time of the models was large, so in the `Report_Final_ML_Cesar_Conejo.rmd` file that creates the final report in pdf format that was uploaded in AulaGlobal calls three `.rda` objects with the trained models.
+
+* `train_models_3class_ML.rda`  for the 3-problem classification (optimization in function ofaccuracy).
+
+* `train_models_2class_ML.rda`  for the binary classification (Specificity).
+
+*  `train_models_2class_econProfit_ML.rda` for the binary classification (Economic Profit).
+
+Also, the data set `wineQuality.rda` and the function `draw_functions.R` that represents graphically the confusion matrix is attached in the .rar object uploaded in Aula Global.
+
+
+```{r eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+# Clean the enviroment
+rm(list=ls())
+```
