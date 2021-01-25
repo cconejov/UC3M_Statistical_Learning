@@ -29,8 +29,10 @@ load('rda/wineQuality.rda')
 
 library(caret)
 set.seed(42)
-spl = createDataPartition(wineQuality$quality, p = 0.11, list = FALSE)  # 11% for evaluating
+spl = createDataPartition(wineQuality$quality, p = 0.05, list = FALSE)  # 11% for evaluating
 wineQuality <- wineQuality[spl,]
 rm(spl)
 
 save(wineQuality, file = 'rda/wineQualityLightVersion.rda')
+
+# Original size light version 0.11
