@@ -12,12 +12,15 @@ Contain the dataset and the calibrated models
 
 Contain all the raw code used in the project:
 
-
+---------------------------------
 1. Data wrangle scripts: 
+---------------------------------
 
 * 1-data-wrangle.R
 
-2. `R` raw code Middle project
+---------------------------------
+2. `R` raw code Middle project:
+---------------------------------
 
 * 2-Visual-analysis.R
 
@@ -27,7 +30,9 @@ Contain all the raw code used in the project:
 
 * 5-Classification-Reduced-Classes.R
 
-3. `R` raw code Final Project
+---------------------------------
+3. `R` raw code Final Project:
+---------------------------------
 
 * 6-ML_Tools_3_Classes.R
 
